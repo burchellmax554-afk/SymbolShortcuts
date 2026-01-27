@@ -17,7 +17,7 @@ static volatile TC_CNT_BUFFER_T tcCntBuffer = {0u};
 *****************************************************************************************/
 void TCCounterInit(void)
 {
-    /* Enable clock path for LPTMR (this macro worked in your current SDK build) */
+    /* Enable clock path for LPTMR */
     SYSCON->CLOCK_CTRL |= SYSCON_CLOCK_CTRL_CLKIN_ENA_FM_USBH_LPT(1);
 
     /* Disable timer while configuring */
