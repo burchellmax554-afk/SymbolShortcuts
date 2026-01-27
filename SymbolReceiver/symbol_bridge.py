@@ -94,9 +94,8 @@ def timer_record(label: str | None = None):
 
 # ========== MAIN LOOP ==========
 def main():
-    selected_symbol = None   # What MCU has currently selected (SYMBOL_IDX)
-    last_sent_symbol = None  # What MCU last sent on SW3 (SYMBOL_SENT)
-
+    selected_symbol = SYMBOLS[0]   # Assume default at boot
+    last_sent_symbol = None
     clear_screen()
     draw_ui(selected_symbol, last_sent_symbol)
 
