@@ -27,7 +27,7 @@ void TCCounterInit(void)
     LPTMR0->PSR = LPTMR_PSR_PCS(3) | LPTMR_PSR_PBYP(1);
 
     /* Compare value sets interrupt period */
-    LPTMR0->CMR = LPTMR_CMR_COMPARE(240000u - 1u);
+    LPTMR0->CMR = LPTMR_CMR_COMPARE(24000u - 1u);
 
     /* Clear compare flag */
     LPTMR0->CSR = LPTMR_CSR_TCF(1);
