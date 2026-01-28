@@ -111,6 +111,7 @@ void MenuTiming_Start(void)
 /*****************************************************************************************
 * MenuTiming_()
 *   Prints: "<label>: <ms> ms" on terminal line 4
+*   Only viewable on the MCU terminal, not carried over to Python end
 ****************************************************************************************/
 void MenuTiming_EndPrint(const INT8C *label)
 {
@@ -123,8 +124,8 @@ void MenuTiming_EndPrint(const INT8C *label)
     /* unsigned subtraction safely handles wraparound */
     INT32U dt_ticks = (INT32U)(t1 - g_t0_ticks);
 
-    /* 100 Hz tick -> 10 ms per tick */
-    INT32U dt_ms = dt_ticks * 10u;
+    /* Timer value saved in ms */
+    INT32U dt_ms = dt_ticks;
 
     /* Go to line 4 */
     BIOPutStrg("\x1B[4;1H\x1B[K");
