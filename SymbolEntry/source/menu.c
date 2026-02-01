@@ -25,29 +25,10 @@ static INT8U  g_timing_armed = 0;
 *   Intended to keep python-friendly "full lines" with '\n' at end.
 *****************************************************************************************/
 void UpdateMenu(void) {
-
-    /* Clear entire screen + home cursor for a clean menu */
-    BIOPutStrg("\033[2J\033[H");
-
-    /* LINE 1: symbol library with brackets */
-    for (INT8U i = 0; i < SYMBOL_COUNT; i++) {
-        if (i == current_symbol_index) {
-            BIOPutStrg("["); /* Once the symbol is found, put brackets around it */
-            BIOPutStrg(symbols[i]);
-            BIOPutStrg("] ");
-        } else {
-            BIOPutStrg(symbols[i]);
-            BIOPutStrg(" ");
-        }
-    }
-    BIOPutStrg("\r\n");
-
-    /* LINE 2: SYMBOL_IDX: <symbol> */
     BIOPutStrg("SYMBOL_IDX: ");
     BIOPutStrg(symbols[current_symbol_index]);
     BIOPutStrg("\r\n");
 
-    /* LINE 3: SYMBOL_SENT: <symbol> or -- if none*/
     BIOPutStrg("SYMBOL_SENT: ");
     if (last_sent_symbol != 0) {
         BIOPutStrg(last_sent_symbol);
@@ -55,9 +36,6 @@ void UpdateMenu(void) {
         BIOPutStrg("--");
     }
     BIOPutStrg("\r\n");
-
-    /* LINE 4: RESPONSE_TIME */
-
 }
 
 
@@ -76,7 +54,10 @@ INT8U GetCurrentSymbolIndex(void) {
 void SetCurrentSymbolIndex(INT8U index) {
     if (index < SYMBOL_COUNT) {
         current_symbol_index = index;
-        UpdateMenu();
+
+        BIOPutStrg("SYMBOL_IDX: ");
+        BIOPutStrg(symbols[current_symbol_index]);
+        BIOPutStrg("\r\n");
     }
 }
 
@@ -95,7 +76,14 @@ const INT8C* GetCurrentSymbol(void) {
 *****************************************************************************************/
 void SetLastSentSymbol(const INT8C *sym) {
     last_sent_symbol = sym;
-    UpdateMenu();
+
+    BIOPutStrg("SYMBOL_SENT: ");
+    if (last_sent_symbol != 0) {
+        BIOPutStrg(last_sent_symbol);
+    } else {
+        BIOPutStrg("--");
+    }
+    BIOPutStrg("\r\n");
 }
 
 /*****************************************************************************************
@@ -111,32 +99,27 @@ void MenuTiming_Start(void)
 /*****************************************************************************************
 * MenuTiming_()
 *   Prints: "<label>: <ms> ms" on terminal line 4
-*   Only viewable on the MCU terminal, not carried over to Python end
 ****************************************************************************************/
 void MenuTiming_EndPrint(const INT8C *label)
 {
     if (!g_timing_armed) {
-        return; /* start not called */
+        return;
     }
 
     INT32U t1 = TCCountGet();
-
-    /* unsigned subtraction safely handles wraparound */
     INT32U dt_ticks = (INT32U)(t1 - g_t0_ticks);
+    INT32U dt_ms = dt_ticks;  /* TCCountGet is already ms ticks */
 
-    /* Timer value saved in ms */
-    INT32U dt_ms = dt_ticks;
-
-    /* Go to line 4 */
-    BIOPutStrg("\x1B[4;1H\x1B[K");
-
+    /* Plain text, python-friendly */
+    BIOPutStrg("MCU_");
     if (label != (const INT8C *)0) {
-        BIOPutStrg(label);
-        BIOPutStrg(": ");
+        BIOPutStrg(label);          /* "SW2" or "SW3" */
+    } else {
+        BIOPutStrg("TIME");
     }
-
+    BIOPutStrg("_MS: ");
     BIOOutDecWord(dt_ms, 4, BIO_OD_MODE_AR);
-    BIOPutStrg(" ms");
+    BIOPutStrg("\r\n");
 
     g_timing_armed = 0;
 }
