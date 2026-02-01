@@ -2,16 +2,18 @@
 # Live mirror of MCU symbol state with clipboard copy on send
 # UI (two lines, ANSI redraw):
 #   Symbol Library: π [∑] µ Ω ∫
-#   Last Sent: —
+#   Currently Copied Symbol: —
 
-import serial # For connection to virtual port
-import sys # For the terminal UI
-import time # For recording response times and delaying a loop
-import pyperclip # For running ctrl+c commands
+import serial  # For connection to virtual port
+import sys     # For the terminal UI
+import time    # For recording response times and delaying a loop
+import pyperclip  # For clipboard ctrl+c commands
+import pyautogui # For running ctrl+v commands
+import subprocess # For debugging
 
 # ========== CONFIG ==========
 PORT = "/dev/cu.usbmodemO0LVP5LSL4VXL3"  # My current board's port
-BAUDRATE = 115200 
+BAUDRATE = 115200
 TIMEOUT = 0.2
 
 # ========== TRIGGER PHRASES ==========
@@ -21,30 +23,34 @@ TRIG_SEND = "SYMBOL_SENT:"  # From MCU on SW3
 # Order MUST match MCU's menu.c for the bracket highlight to align
 SYMBOLS = ["π", "∑", "µ", "Ω", "∫"]
 
+# Debug prints. Displays the following:
+# Frontmost app 
+# Raw MCU output
+# Message classification
+# Host side filter decisions
+DEBUG = False
+
 # Start without any measurement
 _t0_ns = None
 
 # ========== UI HELPERS ==========
-# Clear the entire screen
 def clear_screen():
     # Clear entire screen and move cursor home
     sys.stdout.write("\033[2J\033[H")
     sys.stdout.flush()
 
-# Create a UI
 def draw_ui(selected_symbol: str | None, last_sent: str | None):
     # Redraw the 2-line UI without scrolling
     # Line 1: Symbol Library with brackets around the selected one
-    sys.stdout.write("\033[1;1H")      # Move to row 1, col 1
-    sys.stdout.write("\033[K")         # Clear to end of line
+    sys.stdout.write("\033[1;1H")  # Move to row 1, col 1
+    sys.stdout.write("\033[K")     # Clear to end of line
     sys.stdout.write("Symbol Library: ")
-    # Determine which index is selected (if any)
-    try: # Here to stop a crash if the next line fails
-        sel_idx = SYMBOLS.index(selected_symbol) if selected_symbol else -1
-    except ValueError: 
-        sel_idx = -1  # Unknown symbol - render with no highlight
 
-    # Print the list of symbols, putting [] around the selected one
+    try:
+        sel_idx = SYMBOLS.index(selected_symbol) if selected_symbol else -1
+    except ValueError:
+        sel_idx = -1
+
     for i, sym in enumerate(SYMBOLS):
         if i == sel_idx:
             sys.stdout.write(f"[{sym}] ")
@@ -52,13 +58,12 @@ def draw_ui(selected_symbol: str | None, last_sent: str | None):
             sys.stdout.write(f"{sym} ")
 
     # Line 2: Currently Copied Symbol
-    sys.stdout.write("\n\033[K")       # Ensure program is on line 2 and clear it
+    sys.stdout.write("\n\033[K")
     sys.stdout.write("Currently Copied Symbol: ")
     sys.stdout.write(last_sent if last_sent else "—")
-    sys.stdout.write("\033[K")         # Clear rest of line (in case length shrank)
+    sys.stdout.write("\033[K")
     sys.stdout.flush()
 
-# Find the symbol the MCU sent over
 def extract_symbol(line: str) -> str | None:
     # Return the first non-empty token after the colon
     try:
@@ -66,65 +71,85 @@ def extract_symbol(line: str) -> str | None:
         return rhs.split()[0] if rhs else None
     except Exception:
         return None
+    
+def clipboard_copy_mac(text: str):
+    subprocess.run("pbcopy", input=text, text=True, check=False)
 
-# ========== TIMER SETUP ==========   
+# ========== DEBUG HELPERS ==========
+def frontmost_app_name() -> str:
+    try:
+        out = subprocess.check_output(
+            [
+                "osascript",
+                "-e",
+                'tell application "System Events" to get name of first application process whose frontmost is true'
+            ],
+            text=True
+        ).strip()
+        return out
+    except Exception:
+        return ""
+
+def terminal_is_focused() -> bool:
+    app = frontmost_app_name()
+    return app in ("Terminal", "iTerm2")
+
+def debug_line(row: int, text: str):
+    # Non-intrusive debug print to a fixed row
+    sys.stdout.write(f"\033[{row};1H\033[K{text}")
+    sys.stdout.flush()
+
+# ========== TIMER SETUP ==========
 def timer_start():
-    # Code to start timer
     global _t0_ns
     _t0_ns = time.perf_counter_ns()
 
 def timer_record(label: str | None = None):
-    # Code to record time
     global _t0_ns
-    # Prevent timer_stop from continuing if timer isn't going
-    if _t0_ns is None: 
+    if _t0_ns is None:
         return None
-    # Find time since input was detected
+
     dt_ns = time.perf_counter_ns() - _t0_ns
     _t0_ns = None
-    # Convert from ns to ms
     dt_ms = dt_ns / 1_000_000
+
     if label:
-        sys.stdout.write("\033[3;1H")      # Move cursor to line 3, column 1
-        sys.stdout.write("\033[K")         # Clear the entire line
+        sys.stdout.write("\033[3;1H")
+        sys.stdout.write("\033[K")
         sys.stdout.write(f"{label}: {dt_ms:.3f} ms")
         sys.stdout.flush()
-    return dt_ms
 
+    return dt_ms
 
 # ========== MAIN LOOP ==========
 def main():
-    selected_symbol = SYMBOLS[0]   # Assume default at boot
+    selected_symbol = SYMBOLS[0]  # Assume default at boot
     last_sent_symbol = None
+
     clear_screen()
     draw_ui(selected_symbol, last_sent_symbol)
 
-    # Connect/reconnect loop
+    last_idx_time = 0.0  # For host-side guard against spurious SEND after IDX
+
     while True:
         try:
-            sys.stdout.write("\033[4;1H\033[K")
-            sys.stdout.write(f"Connecting to {PORT} @ {BAUDRATE}...")
-            sys.stdout.flush()
+            debug_line(4, f"Connecting to {PORT} @ {BAUDRATE}...")
 
-            # Run the correct port at the needed baudrate, establish a timeout, 
-            # attach it to a variable, ser
             with serial.Serial(PORT, BAUDRATE, timeout=TIMEOUT) as ser:
+                ser.reset_input_buffer()
 
-                # Toss any partial line
-                ser.reset_input_buffer() # Cancel the data waiting to be read
+                debug_line(4, "")  # Clear status line
 
-                # Connected—erase status line to stop repitition
-                sys.stdout.write("\033[4;1H\033[K")
-                sys.stdout.flush()
-
-                # Everything is set up correctly, wait for updates
-                while True: 
-                    # Check each line for the correct data
+                while True:
                     line = ser.readline().decode(errors="ignore").strip()
                     if not line:
                         continue
 
-                    # Handle selection updates (SW2 or startup)
+                    if DEBUG:
+                        debug_line(6, f"RAW: {repr(line)}")
+                        debug_line(5, f"Frontmost: {frontmost_app_name()}")
+
+                    # ---- SW2 / selection updates ----
                     if line.startswith(TRIG_IDX):
                         timer_start()
                         sym = extract_symbol(line)
@@ -132,9 +157,11 @@ def main():
                             selected_symbol = sym
                             draw_ui(selected_symbol, last_sent_symbol)
                             timer_record("Menu update")
+                        if DEBUG:
+                            debug_line(7, "IDX handled")
                         continue
 
-                    # Handle send event (SW3)
+                    # ---- SW3 / send events ----
                     if line.startswith(TRIG_SEND):
                         timer_start()
                         sym = extract_symbol(line)
@@ -143,32 +170,40 @@ def main():
                                 last_sent_symbol = None
                             else:
                                 last_sent_symbol = sym
+
+                            draw_ui(selected_symbol, last_sent_symbol)
+                            t_handle = timer_record("Menu + copy update")   # Any dalay after this point is a hardware issue
+
+                            # OS-dependent step (not counted)
+                            if sym != "--":
                                 try:
-                                    pyperclip.copy(sym) # Auto-copy the symbol down
+                                    # Replace with pbcopy if you want
+                                    pyperclip.copy(sym)
+                                    pyautogui.hotkey("command", "v")
                                 except Exception:
                                     pass
-                            draw_ui(selected_symbol, last_sent_symbol)
-                            timer_record("Copy + menu update")
                         continue
 
-        # Prevent a crash when ctrl+c is pressed in terminal
+
+                    # Unknown message type
+                    if DEBUG:
+                        debug_line(7, "Unknown message (ignored)")
+
         except KeyboardInterrupt:
             sys.stdout.write("\nExiting.\n")
             return
+
         except serial.SerialException:
-            # Likely board unplugged or port busy. Sleep and retry.
-            sys.stdout.write("\033[4;1H\033[K")
-            sys.stdout.write("Port unavailable. Retrying in 2s...")
-            sys.stdout.flush()
+            for i in range(5, 0, -1):
+                debug_line(4, f"Port unavailable. Retrying in {i}s...")
+                time.sleep(1)
 
-            time.sleep(2) # Hold 2 seconds
         except Exception as e:
-            # Unexpected error—show briefly, then retry
-            sys.stdout.write("\033[4;1H\033[K")
-            sys.stdout.write(f"Error: {e}")
-            sys.stdout.flush()
-
-            time.sleep(2) # Hold 2 seconds
+            # Show just the first line of the error
+            err = str(e).splitlines()[0] if str(e) else "Unknown error"
+            for i in range(5, 0, -1):
+                debug_line(4, f"Error: {err}. Retrying in {i}s...")
+                time.sleep(1)
 
 if __name__ == "__main__":
     main()
