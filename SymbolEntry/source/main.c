@@ -131,28 +131,27 @@ static void appTaskSymbolControl(void *p_arg) {
     /* Look for switch presses */
     while (1) {
 
-        /* This blocks until SW2 or SW3 is pressed */
-    	sw_in = SwPend(OS_CFG_TICK_RATE_HZ / 10u, &os_err);
+        sw_in = SwPend(OS_CFG_TICK_RATE_HZ / 10u, &os_err);
 
-    	if (os_err == OS_ERR_NONE) {
-    	    /* Button event happened */
-    	    if (sw_in == SW2) { /* SW2 pressed-cycle through symbol list */
-    	    	MenuTiming_Start();
-    	        INT8U next_index = (INT8U)((GetCurrentSymbolIndex() + 1u) % SYMBOL_COUNT);
-    	        SetCurrentSymbolIndex(next_index);
-    	        MenuTiming_EndPrint("MCU SW2");
-    	    }
-    	    else if (sw_in == SW3) { /* SW3 pressed-copy the symbol down */
-    	    	MenuTiming_Start();
-    	        SetLastSentSymbol(GetCurrentSymbol());
-    	        MenuTiming_EndPrint("MCU SW3");
-    	    }
-    	} else if (os_err == OS_ERR_TIMEOUT) {
-    	    /* No button this cycle */
-    	} else {
-    	    /* Unexpected error */
-    	    assert(0);
-    	}
+        if (os_err == OS_ERR_NONE) {
+
+            if (sw_in == SW2) {
+                MenuTiming_Start();
+                INT8U next_index = (INT8U)((GetCurrentSymbolIndex() + 1u) % SYMBOL_COUNT);
+                SetCurrentSymbolIndex(next_index);     // Should prints SYMBOL_IDX: <sym>
+                MenuTiming_EndPrint("SW2");            // Prints MCU_SW2_MS: <ms>
+            }
+            else if (sw_in == SW3) {
+                MenuTiming_Start();
+                SetLastSentSymbol(GetCurrentSymbol()); // Prints SYMBOL_SENT: <sym>
+                MenuTiming_EndPrint("SW3");            // Prints MCU_SW3_MS: <ms>
+            }
+
+        } else if (os_err == OS_ERR_TIMEOUT) {
+            /* No button this cycle */
+        } else {
+            assert(0);
+        }
     }
 }
 
