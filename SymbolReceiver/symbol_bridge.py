@@ -177,7 +177,6 @@ def main():
                             # OS-dependent step (not counted)
                             if sym != "--":
                                 try:
-                                    # Replace with pbcopy if you want
                                     pyperclip.copy(sym)
                                     pyautogui.hotkey("command", "v")
                                 except Exception:
