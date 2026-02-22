@@ -1,8 +1,7 @@
 # SymbolReceiver.py
-# Live mirror of MCU symbol state with clipboard copy on send
-# This version uses copy+paste commands as shortcuts
+# Live mirror of MCU symbol state taht sends input to text apps
 # Pros: any symbol can be used with this method, very customizable
-# Cons: clipboard is occupied by other symbols, somewhat slow depedning on the device
+# Cons: somewhat slow depedning on the device
 # UI (two lines, ANSI redraw):
 #   Symbol Library: π [∑] µ Ω ∫
 #   Currently Copied Symbol: —
@@ -13,11 +12,14 @@ import time    # For recording response times and delaying a loop
 import pyperclip  # For getting the characters to the device
 import pyautogui # For getting the characters to the device
 import subprocess # For debugging and keystroke emulation
+import platform # For cross-platform functionality
 
 # In addition, the following dependencies are required:
 # Pyserial 
 # Pyperclip  
 # Pyautogui 
+# pywin32 (Windows only)
+# psutil (Windows only)
 
 # ========== CONFIG ==========
 PORT = "/dev/cu.usbmodemO0LVP5LSL4VXL3"  # My board's current port
@@ -32,9 +34,11 @@ TRIG_SEND = "SYMBOL_SENT:"  # From MCU on SW3
 # Had such a FUN time debugging this :)
 SYMBOLS = ["π", "∑", "µ", "Ω", "∫"]
 
-# Don;t want the character getting typed int he following apps
-BLOCK_APPS = {"Terminal", "iTerm2"}  # add "Visual Studio Code" if needed, etc.
+# Don't want the character getting typed in the following apps for Windows:
+WINDOWS_BLOCK_APPS = {"WindowsTerminal.exe", "cmd.exe", "powershell.exe", "pwsh.exe"}  # Keep testing for other apps
 
+# Don't want the character getting typed in the following apps for Mac:
+MAC_BLOCK_APPS = {"Terminal", "iTerm2"}  # Keep testing for other apps
 
 # Toggle if debug prints. Displays the following:
 # Frontmost app 
@@ -45,6 +49,16 @@ DEBUG = False
 
 # Start without any measurement
 _t0_ns = None
+
+# Figure out the platform for different responses
+OS_NAME = platform.system()  # computed once
+
+# Windows exclusive imports not compatible with other platforms
+# All 3 are used to prevent "write" from accessing the wrong apps
+if OS_NAME == "Windows": # Don't want to import on a platform these don't exist on
+    import psutil
+    import win32gui
+    import win32process
 
 # ========== UI HELPERS ==========
 def clear_screen():
@@ -90,6 +104,8 @@ def extract_symbol(line: str) -> str | None:
 # ========== DEBUG HELPERS ==========
 # Can be toggled on and off
 def frontmost_app_name() -> str:
+    if OS_NAME != "Darwin": # This will fail on windows
+        return ""
     try:
         out = subprocess.check_output(
             [
@@ -107,8 +123,8 @@ def frontmost_app_name() -> str:
 def terminal_is_focused() -> bool:
     # For debugging. See what is in focus
     # WARNING: ADDS AT LEAST 120ms TO THE PROCESS
-    # FOR BETTER RESULTS, USE THE CUSTOM DRIVER keystroke_emulation 
-    # IF ON MACBOOK OR USE (TO BE ADDED) IF ON WINDOWS/LINUX
+    # FOR BETTER RESULTS, USE THE CUSTOM DRIVER keystroke_emulation_windows
+    # IF ON WINDOWS OR USE keystroke_emulation_mac IF ON MAC
     app = frontmost_app_name()
     return app in ("Terminal", "iTerm2")
 
@@ -145,13 +161,33 @@ def timer_record(label: str | None = None):
 # ========== Keyboard Emulation ==========
 # Ensures charcaters are sent to device correctly as a keypress
 # Also prevents accidental terminal overwrites
-# MacOS only. See (TO BE ADDED) for the windows/linux equivalent
-def keystroke_emulation(text: str):
+# There's a Windows and Mac version (Maybe future Linix version?)
+# The correct paltform is found at the start to automatically use the correct
+# function
+
+# Windows version
+def keystroke_emulation_windows(text: str):
+    try:
+        hwnd = win32gui.GetForegroundWindow()
+        if not hwnd:
+            return
+        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        if not pid:
+            return
+
+        name = psutil.Process(pid).name()
+        if name not in WINDOWS_BLOCK_APPS:
+            pyautogui.write(text)
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return
+
+# MacOS version
+def keystroke_emulation_mac(text: str):
     safe = text.replace("\\", "\\\\").replace('"', '\\"')
 
     # Don't emulate a keypress if terminal or VS code is 
     # in focus to prevent code overwrites
-    block_list = ", ".join([f'"{a}"' for a in BLOCK_APPS])
+    block_list = ", ".join([f'"{a}"' for a in MAC_BLOCK_APPS])
 
     script = f'''
     tell application "System Events"
@@ -161,7 +197,6 @@ def keystroke_emulation(text: str):
         end if
     end tell
     '''
-
     subprocess.run(["osascript", "-e", script], check=True)
 
 # ========== MAIN LOOP ==========
@@ -217,16 +252,17 @@ def main():
                                 last_sent_symbol = sym
                             draw_ui(selected_symbol, last_sent_symbol)
 
-                            # Copy + Paste the symbol to the device
+                            # Write symbol to device
                             if sym != "--":
                                 try:
-                                    # For testing I use this copy + paste method as it works more consisently
-                                    # on my device. Alternate but less consistent line to try:
-                                    # pyautogui.write(sym)
-                                    # The "write" method also frees up the clipboard
-                                    # t_handle = timer_record("Menu + write update")   # Any dalay after this point is a computer issue
-                                    keystroke_emulation(sym)
-                                    t_handle = timer_record("Menu + write update")   # Computer-dependent delay
+                                    # Figure out the operating system and how to repsond
+                                    if OS_NAME == "Darwin": # For Mac
+                                        keystroke_emulation_mac(sym)
+                                    elif OS_NAME == "Windows": # For Windows
+                                        keystroke_emulation_windows(sym)
+                                    else: # For Linux/other operating system
+                                        pyautogui.write(sym)
+                                    t_handle = timer_record("Menu + write update")   # Device-dependent delay
                                 except Exception: # Crash prevention
                                     pass
                         continue
@@ -256,5 +292,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-// Extra note so I can press "commit"
