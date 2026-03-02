@@ -1,10 +1,8 @@
 # SymbolReceiver.py
 # Live mirror of MCU symbol state taht sends input to text apps
-# Pros: any symbol can be used with this method, very customizable
-# Cons: somewhat slow depedning on the device
 # UI (two lines, ANSI redraw):
 #   Symbol Library: π [∑] µ Ω ∫
-#   Currently Copied Symbol: —
+#   Last Sent Symbol Symbol: —
 
 import serial  # For connection to virtual port
 import sys     # For the terminal UI
@@ -22,7 +20,8 @@ import platform # For cross-platform functionality
 # psutil (Windows only)
 
 # ========== CONFIG ==========
-PORT = "/dev/cu.usbmodemO0LVP5LSL4VXL3"  # My board's current port
+# PORT = "/dev/cu.usbmodemO0LVP5LSL4VXL3"  # My board's current port
+PORT = "COM4"
 BAUDRATE = 115200 # Baud rate
 TIMEOUT = 0.2 # Check for serial updates for 0.2 s every iteration
 
@@ -35,7 +34,7 @@ TRIG_SEND = "SYMBOL_SENT:"  # From MCU on SW3
 SYMBOLS = ["π", "∑", "µ", "Ω", "∫"]
 
 # Don't want the character getting typed in the following apps for Windows:
-WINDOWS_BLOCK_APPS = {"WindowsTerminal.exe", "cmd.exe", "powershell.exe", "pwsh.exe"}  # Keep testing for other apps
+WINDOWS_BLOCK_APPS = {"WindowsTerminal.exe", "cmd.exe", "powershell.exe", "pwsh.exe", "Code.exe"}  # Keep testing for other apps
 
 # Don't want the character getting typed in the following apps for Mac:
 MAC_BLOCK_APPS = {"Terminal", "iTerm2"}  # Keep testing for other apps
@@ -54,12 +53,14 @@ _t0_ns = None
 OS_NAME = platform.system()  # computed once
 
 # Windows exclusive imports not compatible with other platforms
-# All 3 are used to prevent "write" from accessing the wrong apps
+# The 1st 3 are used to prevent "write" from accessing the wrong apps
+# "keyboard" is used to ensure emulation goes smoothly for Windows
 if OS_NAME == "Windows": # Don't want to import on a platform these don't exist on
     import psutil
     import win32gui
-    import win32process
-
+    import win32process  
+    import keyboard
+    
 # ========== UI HELPERS ==========
 def clear_screen():
     # Clear entire screen and move cursor home
@@ -102,9 +103,9 @@ def extract_symbol(line: str) -> str | None:
         return None
 
 # ========== DEBUG HELPERS ==========
-# Can be toggled on and off
+# Mac Exclusive
 def frontmost_app_name() -> str:
-    if OS_NAME != "Darwin": # This will fail on windows
+    if OS_NAME != "Darwin": # MacOS only, ignore it otherwise
         return ""
     try:
         out = subprocess.check_output(
@@ -118,15 +119,6 @@ def frontmost_app_name() -> str:
         return out
     except Exception:
         return ""
-
-# Legacy function left as a fallback
-def terminal_is_focused() -> bool:
-    # For debugging. See what is in focus
-    # WARNING: ADDS AT LEAST 120ms TO THE PROCESS
-    # FOR BETTER RESULTS, USE THE CUSTOM DRIVER keystroke_emulation_windows
-    # IF ON WINDOWS OR USE keystroke_emulation_mac IF ON MAC
-    app = frontmost_app_name()
-    return app in ("Terminal", "iTerm2")
 
 def debug_line(row: int, text: str):
     # Debug print to a fixed row
@@ -162,31 +154,39 @@ def timer_record(label: str | None = None):
 # Ensures charcaters are sent to device correctly as a keypress
 # Also prevents accidental terminal overwrites
 # There's a Windows and Mac version (Maybe future Linix version?)
-# The correct paltform is found at the start to automatically use the correct
-# function
+# The correct platform is found at the start to automatically use the
+# correct function
 
 # Windows version
 def keystroke_emulation_windows(text: str):
     try:
-        hwnd = win32gui.GetForegroundWindow()
-        if not hwnd:
+        # Find the window in focus
+        hwnd = win32gui.GetForegroundWindow() # Window in focus
+        if not hwnd: # Safeguard
             return
+        # Use PID to name the process currently in focus
+        # "_" allows the thread ID that is found to be ignored
         _, pid = win32process.GetWindowThreadProcessId(hwnd)
         if not pid:
             return
 
+        # Get the executable name of the focused app and block if needed
         name = psutil.Process(pid).name()
-        if name not in WINDOWS_BLOCK_APPS:
-            pyautogui.write(text)
+        if name in WINDOWS_BLOCK_APPS:
+            return
+
+        # "keyboard" works best for Windows
+        keyboard.write(text)   
+
+    # An error occurred somewhere in the emulation
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         return
-
+    
 # MacOS version
 def keystroke_emulation_mac(text: str):
     safe = text.replace("\\", "\\\\").replace('"', '\\"')
 
-    # Don't emulate a keypress if terminal or VS code is 
-    # in focus to prevent code overwrites
+    # Cancel request if blocked app is focused
     block_list = ", ".join([f'"{a}"' for a in MAC_BLOCK_APPS])
 
     script = f'''
@@ -198,6 +198,15 @@ def keystroke_emulation_mac(text: str):
     end tell
     '''
     subprocess.run(["osascript", "-e", script], check=True)
+
+# Legacy version left as a fallback
+def terminal_is_focused() -> bool:
+    # See what is in focus. Also useful for debugging
+    # WARNING: ADDS AT LEAST 120ms TO THE PROCESS
+    # The keyboard emulation functions are prioritzed for 
+    # faster response, but this is used if all else fails
+    app = frontmost_app_name()
+    return app in ("Terminal", "iTerm2")
 
 # ========== MAIN LOOP ==========
 def main():
@@ -258,11 +267,14 @@ def main():
                                     # Figure out the operating system and how to repsond
                                     if OS_NAME == "Darwin": # For Mac
                                         keystroke_emulation_mac(sym)
+                                        t_handle = timer_record("Menu + write update")   # Device-dependent delay
                                     elif OS_NAME == "Windows": # For Windows
                                         keystroke_emulation_windows(sym)
-                                    else: # For Linux/other operating system
-                                        pyautogui.write(sym)
-                                    t_handle = timer_record("Menu + write update")   # Device-dependent delay
+                                        t_handle = timer_record("Menu + write update")   # Device-dependent delay
+                                    else: # Less effective fallback if not on a Mac/Windows or other error
+                                        if not terminal_is_focused():
+                                            pyautogui.write(sym)
+                                            t_handle = timer_record("Menu + write update")   # Device-dependent delay
                                 except Exception: # Crash prevention
                                     pass
                         continue
@@ -277,7 +289,7 @@ def main():
             sys.stdout.write("\nExiting.\n")
             return
 
-        except serial.SerialException:
+        except serial.SerialException as err:
             # Port probably disconnected
             for i in range(5, 0, -1):
                 debug_line(4, f"Port unavailable. Retrying in {i}s...")
@@ -292,3 +304,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
