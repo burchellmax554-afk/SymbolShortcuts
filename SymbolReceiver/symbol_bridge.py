@@ -11,17 +11,35 @@ import pyperclip  # For getting the characters to the device
 import pyautogui # For getting the characters to the device
 import subprocess # For debugging and keystroke emulation
 import platform # For cross-platform functionality
+import serial.tools.list_ports # To auto-connect to the right port
+
 
 # In addition, the following dependencies are required:
-# Pyserial 
-# Pyperclip  
-# Pyautogui 
+# Pyserial
+# Pyperclip
+# Pyautogui
 # pywin32 (Windows only)
 # psutil (Windows only)
 
 # ========== CONFIG ==========
-# PORT = "/dev/cu.usbmodemO0LVP5LSL4VXL3"  # My board's current port
-PORT = "COM4"
+VID = 0x1FC9
+PID = 0x0143
+
+# Find correct port automatically
+def auto_detect_port():
+    ports = serial.tools.list_ports.comports()
+
+    for p in ports:
+        if p.vid == VID and p.pid == PID:
+            return p.device
+
+    # fallback: macOS usbmodem name (optional)
+    for p in ports:
+        if p.device.startswith("/dev/cu.usbmodem"):
+            return p.device
+
+    return None
+
 BAUDRATE = 115200 # Baud rate
 TIMEOUT = 0.2 # Check for serial updates for 0.2 s every iteration
 
@@ -40,7 +58,7 @@ WINDOWS_BLOCK_APPS = {"WindowsTerminal.exe", "cmd.exe", "powershell.exe", "pwsh.
 MAC_BLOCK_APPS = {"Terminal", "iTerm2"}  # Keep testing for other apps
 
 # Toggle if debug prints. Displays the following:
-# Frontmost app 
+# Frontmost app
 # Raw MCU output
 # Message classification
 # Host side filter decisions
@@ -55,12 +73,13 @@ OS_NAME = platform.system()  # computed once
 # Windows exclusive imports not compatible with other platforms
 # The 1st 3 are used to prevent "write" from accessing the wrong apps
 # "keyboard" is used to ensure emulation goes smoothly for Windows
-if OS_NAME == "Windows": # Don't want to import on a platform these don't exist on
+if OS_NAME == "Windows":  # Don't want to import on a platform these don't exist on
     import psutil
     import win32gui
-    import win32process  
+    import win32process
     import keyboard
-    
+
+
 # ========== UI HELPERS ==========
 def clear_screen():
     # Clear entire screen and move cursor home
@@ -72,12 +91,12 @@ def draw_ui(selected_symbol: str | None, last_sent: str | None):
     # Line 1: Symbol Library with brackets around the selected one
     sys.stdout.write("\033[1;1H")  # Move to row 1, col 1
     sys.stdout.write("\033[K")     # Clear to end of line
-    sys.stdout.write("Symbol Library: ") 
+    sys.stdout.write("Symbol Library: ")
 
     # Find the needed character in the list
     try:
         sel_idx = SYMBOLS.index(selected_symbol) if selected_symbol else -1
-    except ValueError: # Triggers if the symbol is not in the Python list
+    except ValueError:  # Triggers if the symbol is not in the Python list
         sel_idx = -1
 
     # List all the characters, highlighting the selected one
@@ -90,7 +109,7 @@ def draw_ui(selected_symbol: str | None, last_sent: str | None):
     # Line 2: Currently Copied Symbol
     sys.stdout.write("\n\033[K")
     sys.stdout.write("Currently Copied Symbol: ")
-    sys.stdout.write(last_sent if last_sent else "—") # Print the last symbol, or -
+    sys.stdout.write(last_sent if last_sent else "—")  # Print the last symbol, or -
     sys.stdout.write("\033[K")
     sys.stdout.flush()
 
@@ -102,10 +121,11 @@ def extract_symbol(line: str) -> str | None:
     except Exception:
         return None
 
+
 # ========== DEBUG HELPERS ==========
 # Mac Exclusive
 def frontmost_app_name() -> str:
-    if OS_NAME != "Darwin": # MacOS only, ignore it otherwise
+    if OS_NAME != "Darwin":  # MacOS only, ignore it otherwise
         return ""
     try:
         out = subprocess.check_output(
@@ -125,6 +145,7 @@ def debug_line(row: int, text: str):
     sys.stdout.write(f"\033[{row};1H\033[K{text}")
     sys.stdout.flush()
 
+
 # ========== TIMER SETUP ==========
 def timer_start():
     # Record and save initial time
@@ -139,8 +160,8 @@ def timer_record(label: str | None = None):
 
     # Subtract initial time from final time to get total time
     dt_ns = time.perf_counter_ns() - _t0_ns
-    _t0_ns = None # Reset timer for next iteration
-    dt_ms = dt_ns / 1_000_000 # Convert from ns to ms
+    _t0_ns = None  # Reset timer for next iteration
+    dt_ms = dt_ns / 1_000_000  # Convert from ns to ms
 
     if label:
         sys.stdout.write("\033[3;1H")
@@ -149,6 +170,7 @@ def timer_record(label: str | None = None):
         sys.stdout.flush()
 
     return dt_ms
+
 
 # ========== Keyboard Emulation ==========
 # Ensures charcaters are sent to device correctly as a keypress
@@ -161,9 +183,10 @@ def timer_record(label: str | None = None):
 def keystroke_emulation_windows(text: str):
     try:
         # Find the window in focus
-        hwnd = win32gui.GetForegroundWindow() # Window in focus
-        if not hwnd: # Safeguard
+        hwnd = win32gui.GetForegroundWindow()  # Window in focus
+        if not hwnd:  # Safeguard
             return
+
         # Use PID to name the process currently in focus
         # "_" allows the thread ID that is found to be ignored
         _, pid = win32process.GetWindowThreadProcessId(hwnd)
@@ -176,12 +199,12 @@ def keystroke_emulation_windows(text: str):
             return
 
         # "keyboard" works best for Windows
-        keyboard.write(text)   
+        keyboard.write(text)
 
     # An error occurred somewhere in the emulation
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         return
-    
+
 # MacOS version
 def keystroke_emulation_mac(text: str):
     safe = text.replace("\\", "\\\\").replace('"', '\\"')
@@ -203,30 +226,36 @@ def keystroke_emulation_mac(text: str):
 def terminal_is_focused() -> bool:
     # See what is in focus. Also useful for debugging
     # WARNING: ADDS AT LEAST 120ms TO THE PROCESS
-    # The keyboard emulation functions are prioritzed for 
+    # The keyboard emulation functions are prioritzed for
     # faster response, but this is used if all else fails
     app = frontmost_app_name()
     return app in ("Terminal", "iTerm2")
 
+
 # ========== MAIN LOOP ==========
 def main():
     selected_symbol = SYMBOLS[0]  # Default at boot
-    last_sent_symbol = None # No symbol sent at boot
+    last_sent_symbol = None  # No symbol sent at boot
 
-    clear_screen() # Clear screen before drawing UI
-    draw_ui(selected_symbol, last_sent_symbol) # Draw UI
+    clear_screen()  # Clear screen before drawing UI
+    draw_ui(selected_symbol, last_sent_symbol)  # Draw UI
 
-    last_idx_time = 0.0  
+    last_idx_time = 0.0
 
     # Iterate loop
     while True:
         try:
+            PORT = auto_detect_port()
+            if PORT is None:
+                debug_line(4, "MCU not found. Plug it in...")
+                time.sleep(1)
+                continue
+
             debug_line(4, f"Connecting to {PORT} @ {BAUDRATE}...")
 
-            # Connect to the virtual porrt to start receiving input
+            # Connect to the virtual port to start receiving input
             with serial.Serial(PORT, BAUDRATE, timeout=TIMEOUT) as ser:
                 ser.reset_input_buffer()
-
                 debug_line(4, "")  # Clear status line
 
                 while True:
@@ -241,7 +270,7 @@ def main():
                     # ---- SW2 / selection updates ----
                     if line.startswith(TRIG_IDX):
                         timer_start()
-                        sym = extract_symbol(line) # Grab the selected MCU symbol
+                        sym = extract_symbol(line)  # Grab the selected MCU symbol
                         if sym:
                             selected_symbol = sym
                             draw_ui(selected_symbol, last_sent_symbol)
@@ -264,21 +293,20 @@ def main():
                             # Write symbol to device
                             if sym != "--":
                                 try:
-                                    # Figure out the operating system and how to repsond
-                                    if OS_NAME == "Darwin": # For Mac
+                                    # Figure out the operating system and how to respond
+                                    if OS_NAME == "Darwin":  # For Mac
                                         keystroke_emulation_mac(sym)
-                                        t_handle = timer_record("Menu + write update")   # Device-dependent delay
-                                    elif OS_NAME == "Windows": # For Windows
+                                        timer_record("Menu + write update")  # Device-dependent delay
+                                    elif OS_NAME == "Windows":  # For Windows
                                         keystroke_emulation_windows(sym)
-                                        t_handle = timer_record("Menu + write update")   # Device-dependent delay
-                                    else: # Less effective fallback if not on a Mac/Windows or other error
+                                        timer_record("Menu + write update")  # Device-dependent delay
+                                    else:  # Less effective fallback if not on a Mac/Windows or other error
                                         if not terminal_is_focused():
                                             pyautogui.write(sym)
-                                            t_handle = timer_record("Menu + write update")   # Device-dependent delay
-                                except Exception: # Crash prevention
+                                            timer_record("Menu + write update")  # Device-dependent delay
+                                except Exception:  # Crash prevention
                                     pass
                         continue
-
 
                     # Unknown message type
                     if DEBUG:
@@ -289,11 +317,12 @@ def main():
             sys.stdout.write("\nExiting.\n")
             return
 
-        except serial.SerialException as err:
-            # Port probably disconnected
+        except serial.SerialException:
+            # Port probably disconnected / busy; loop will auto-detect again
             for i in range(5, 0, -1):
                 debug_line(4, f"Port unavailable. Retrying in {i}s...")
                 time.sleep(1)
+            continue
 
         except Exception as e:
             # Show just the first line of the error
@@ -304,4 +333,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
